@@ -1,0 +1,602 @@
+# MTC API Documentation
+
+Base URL: `http://localhost:8080`
+
+All protected endpoints require the header:
+```
+Authorization: Bearer <accessToken>
+```
+
+---
+
+## Table of Contents
+
+- [Authentication](#authentication)
+- [Workspaces](#workspaces)
+- [Channels](#channels)
+- [Messages](#messages)
+- [Presence](#presence)
+- [Invitations](#invitations)
+- [WebSocket / STOMP](#websocket--stomp)
+- [Error Responses](#error-responses)
+
+---
+
+## Authentication
+
+### POST `/api/auth/register`
+
+Register a new user account.
+
+**Request Body:**
+```json
+{
+  "email": "alice@example.com",
+  "username": "alice",
+  "password": "secret123",
+  "displayName": "Alice Smith"
+}
+```
+
+**Response `200 OK`:**
+```json
+{
+  "accessToken": "eyJhbGciOiJIUzI1NiJ9...",
+  "refreshToken": "eyJhbGciOiJIUzI1NiJ9...",
+  "tokenType": "Bearer",
+  "user": {
+    "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "email": "alice@example.com",
+    "username": "alice",
+    "displayName": "Alice Smith",
+    "avatarUrl": null,
+    "online": false,
+    "createdAt": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+**Validation errors:**
+- `email` — must be a valid email, required
+- `username` — 3–30 chars, required
+- `password` — 6–100 chars, required
+
+---
+
+### POST `/api/auth/login`
+
+Authenticate an existing user.
+
+**Request Body:**
+```json
+{
+  "email": "alice@example.com",
+  "password": "secret123"
+}
+```
+
+**Response `200 OK`:** Same shape as `/register`.
+
+---
+
+### POST `/api/auth/refresh`
+
+Get a new access token using a refresh token.
+
+**Request Body:**
+```json
+{
+  "refreshToken": "eyJhbGciOiJIUzI1NiJ9..."
+}
+```
+
+**Response `200 OK`:** Same shape as `/register`.
+
+---
+
+### GET `/api/me`
+
+🔒 Get the current authenticated user's profile.
+
+**Response `200 OK`:**
+```json
+{
+  "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "email": "alice@example.com",
+  "username": "alice",
+  "displayName": "Alice Smith",
+  "online": true,
+  "createdAt": "2024-01-15T10:30:00Z"
+}
+```
+
+---
+
+## Workspaces
+
+### POST `/api/workspaces`
+
+🔒 Create a new workspace. The caller becomes the OWNER.
+
+**Request Body:**
+```json
+{
+  "name": "Acme Corp",
+  "slug": "acme-corp",
+  "description": "Our company workspace"
+}
+```
+
+- `slug` — lowercase, alphanumeric with hyphens (`^[a-z0-9-]+$`), globally unique
+
+**Response `201 Created`:**
+```json
+{
+  "id": "7b9ab123-...",
+  "name": "Acme Corp",
+  "slug": "acme-corp",
+  "description": "Our company workspace",
+  "memberCount": 1,
+  "createdAt": "2024-01-15T10:30:00Z"
+}
+```
+
+**Side effects:** Automatically creates a `#general` channel and adds the owner to it.
+
+---
+
+### GET `/api/workspaces`
+
+🔒 List all workspaces the current user belongs to.
+
+**Response `200 OK`:**
+```json
+[
+  {
+    "id": "7b9ab123-...",
+    "name": "Acme Corp",
+    "slug": "acme-corp",
+    "memberCount": 5,
+    "createdAt": "2024-01-15T10:30:00Z"
+  }
+]
+```
+
+---
+
+### GET `/api/workspaces/{workspaceId}`
+
+🔒 Get a single workspace (must be a member).
+
+**Response `200 OK`:** Single workspace object.
+
+---
+
+### GET `/api/workspaces/{workspaceId}/members`
+
+🔒 List all members of a workspace.
+
+**Response `200 OK`:**
+```json
+[
+  {
+    "userId": "3fa85f64-...",
+    "username": "alice",
+    "displayName": "Alice Smith",
+    "avatarUrl": null,
+    "role": "OWNER",
+    "online": true,
+    "joinedAt": "2024-01-15T10:30:00Z"
+  },
+  {
+    "userId": "8ab12c34-...",
+    "username": "bob",
+    "displayName": "Bob Jones",
+    "role": "MEMBER",
+    "online": false,
+    "joinedAt": "2024-01-16T09:00:00Z"
+  }
+]
+```
+
+---
+
+### POST `/api/workspaces/{workspaceId}/invite`
+
+🔒 Invite a user to the workspace by email. Requires ADMIN or OWNER role.
+
+**Request Body:**
+```json
+{
+  "email": "charlie@example.com"
+}
+```
+
+**Response `200 OK`:**
+```json
+{
+  "inviteToken": "550e8400-e29b-41d4-a716-446655440000",
+  "message": "Invitation created. Share this token with the user."
+}
+```
+
+> In production this token would be emailed. For the demo, share it manually.
+
+---
+
+## Channels
+
+### POST `/api/workspaces/{workspaceId}/channels`
+
+🔒 Create a new channel in a workspace.
+
+**Request Body:**
+```json
+{
+  "name": "engineering",
+  "description": "Engineering team discussion",
+  "privateChannel": false
+}
+```
+
+- `name` — lowercase alphanumeric with hyphens/underscores, unique per workspace
+
+**Response `201 Created`:**
+```json
+{
+  "id": "c1a2b3c4-...",
+  "workspaceId": "7b9ab123-...",
+  "name": "engineering",
+  "description": "Engineering team discussion",
+  "privateChannel": false,
+  "memberCount": 1,
+  "archived": false,
+  "createdAt": "2024-01-15T11:00:00Z"
+}
+```
+
+---
+
+### GET `/api/workspaces/{workspaceId}/channels`
+
+🔒 List all channels visible to the current user (public channels + private channels they are a member of).
+
+**Response `200 OK`:** Array of channel objects.
+
+---
+
+### POST `/api/workspaces/{workspaceId}/channels/{channelId}/join`
+
+🔒 Join a public channel.
+
+**Response `200 OK`** (empty body)
+
+**Error `403`** if the channel is private.
+
+---
+
+### POST `/api/workspaces/{workspaceId}/channels/{channelId}/leave`
+
+🔒 Leave a channel.
+
+**Response `200 OK`** (empty body)
+
+---
+
+### POST `/api/workspaces/{workspaceId}/channels/{channelId}/archive`
+
+🔒 Archive a channel. Requires ADMIN or OWNER role.
+
+**Response `200 OK`** (empty body)
+
+---
+
+## Messages
+
+### POST `/api/workspaces/{workspaceId}/channels/{channelId}/messages`
+
+🔒 Send a message via REST (WebSocket is preferred — this is a fallback endpoint).
+
+**Request Body:**
+```json
+{
+  "content": "Hello everyone!",
+  "clientMsgId": "550e8400-e29b-41d4-a716-446655440000",
+  "replyToId": null
+}
+```
+
+- `clientMsgId` — client-generated UUID for idempotency (optional but recommended)
+- `replyToId` — UUID of the message being replied to (optional)
+
+**Response `201 Created`:**
+```json
+{
+  "id": "m1a2b3c4-...",
+  "channelId": "c1a2b3c4-...",
+  "workspaceId": "7b9ab123-...",
+  "user": {
+    "id": "3fa85f64-...",
+    "username": "alice",
+    "displayName": "Alice Smith"
+  },
+  "content": "Hello everyone!",
+  "messageType": "TEXT",
+  "sequenceNum": 42,
+  "clientMsgId": "550e8400-...",
+  "replyToId": null,
+  "deleted": false,
+  "createdAt": "2024-01-15T11:05:00Z",
+  "updatedAt": "2024-01-15T11:05:00Z"
+}
+```
+
+---
+
+### GET `/api/workspaces/{workspaceId}/channels/{channelId}/messages`
+
+🔒 Fetch paginated message history (oldest to newest).
+
+**Query Parameters:**
+| Parameter | Type    | Default | Description                    |
+|-----------|---------|---------|--------------------------------|
+| `page`    | integer | `0`     | Zero-based page number         |
+| `size`    | integer | `50`    | Messages per page (max `100`)  |
+
+**Response `200 OK`:**
+```json
+{
+  "messages": [ /* array of message objects */ ],
+  "totalElements": 284,
+  "totalPages": 6,
+  "page": 0,
+  "size": 50,
+  "hasMore": true
+}
+```
+
+---
+
+### GET `/api/workspaces/{workspaceId}/channels/{channelId}/messages/missed`
+
+🔒 Fetch all messages with `sequence_num > afterSeq`. Used after reconnect.
+
+**Query Parameters:**
+| Parameter  | Type | Required | Description                          |
+|------------|------|----------|--------------------------------------|
+| `afterSeq` | long | ✅       | Last sequence number the client saw  |
+
+**Response `200 OK`:**
+```json
+[
+  {
+    "id": "...",
+    "sequenceNum": 43,
+    "content": "message you missed",
+    ...
+  }
+]
+```
+
+---
+
+### DELETE `/api/workspaces/{workspaceId}/channels/{channelId}/messages/{messageId}`
+
+🔒 Soft-delete a message (only the sender can delete their own message).
+
+**Response `200 OK`:** The updated message object with `"deleted": true, "content": "[deleted]"`.
+
+---
+
+## Presence
+
+### GET `/api/workspaces/{workspaceId}/presence`
+
+🔒 Get the set of online user IDs in the workspace.
+
+**Response `200 OK`:**
+```json
+{
+  "onlineUserIds": [
+    "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "8ab12c34-1234-5678-abcd-ef0123456789"
+  ]
+}
+```
+
+---
+
+## Invitations
+
+### POST `/api/invitations/accept/{token}`
+
+🔒 Accept a workspace invitation. The current user must have the same email the invitation was sent to.
+
+**Path Parameter:** `token` — the invite token received from the invite endpoint.
+
+**Response `200 OK`:** The workspace object the user just joined.
+
+**Errors:**
+- `400` — token already used or expired
+- `403` — logged-in user's email doesn't match invitation email
+
+---
+
+## WebSocket / STOMP
+
+### Connection
+
+Connect to the SockJS endpoint:
+```
+ws://localhost:8080/ws
+```
+
+Pass the JWT in the STOMP CONNECT frame header:
+```javascript
+const client = new Client({
+  webSocketFactory: () => new SockJS('http://localhost:8080/ws'),
+  connectHeaders: {
+    Authorization: 'Bearer <accessToken>'
+  }
+});
+```
+
+---
+
+### Client → Server (Publish)
+
+#### Send a Message
+**Destination:** `/app/workspaces/{workspaceId}/channels/{channelId}/send`
+
+**Payload:**
+```json
+{
+  "content": "Hello!",
+  "clientMsgId": "uuid-v4-here",
+  "replyToId": null
+}
+```
+
+---
+
+#### Typing Indicator
+**Destination:** `/app/workspaces/{workspaceId}/channels/{channelId}/typing`
+
+**Payload:**
+```json
+{ "typing": true }
+```
+
+Send `{ "typing": false }` when the user stops typing (or after 2-second idle).
+
+---
+
+#### Reconnect / Request Missed Messages
+**Destination:** `/app/channels/{channelId}/reconnect`
+
+**Payload:**
+```json
+{
+  "channelId": "c1a2b3c4-...",
+  "lastSeqNum": 41
+}
+```
+
+The server responds by pushing missed messages to `/topic/channels/{channelId}/messages`.
+
+---
+
+#### Heartbeat (Presence Refresh)
+**Destination:** `/app/heartbeat`
+
+**Payload:** `{}` (empty)
+
+Send every 20 seconds to keep the user's presence alive.
+
+---
+
+### Server → Client (Subscribe)
+
+#### Channel Messages
+**Topic:** `/topic/channels/{channelId}/messages`
+
+**Payload (new message):**
+```json
+{
+  "id": "m1a2b3c4-...",
+  "channelId": "c1a2b3c4-...",
+  "user": { "id": "...", "username": "alice", "displayName": "Alice" },
+  "content": "Hello!",
+  "sequenceNum": 42,
+  "clientMsgId": "uuid-v4-here",
+  "deleted": false,
+  "createdAt": "2024-01-15T11:05:00Z"
+}
+```
+
+**Payload (deleted message):**
+```json
+{
+  "id": "m1a2b3c4-...",
+  "deleted": true,
+  "content": "[deleted]",
+  "sequenceNum": 42
+}
+```
+
+---
+
+#### Typing Indicators
+**Topic:** `/topic/channels/{channelId}/typing`
+
+**Payload:**
+```json
+{
+  "type": "TYPING",
+  "channelId": "c1a2b3c4-...",
+  "userId": "3fa85f64-...",
+  "username": "alice",
+  "typing": true
+}
+```
+
+---
+
+#### Presence Events
+**Topic:** `/topic/presence`
+
+**Payload:**
+```json
+{
+  "type": "PRESENCE",
+  "userId": "3fa85f64-...",
+  "username": "alice",
+  "online": true,
+  "lastSeen": "2024-01-15T11:05:00Z"
+}
+```
+
+---
+
+#### Message Delivery ACK
+**Topic:** `/user/{userId}/queue/acks`  *(personal queue)*
+
+**Payload:**
+```json
+{
+  "type": "ACK",
+  "messageId": "m1a2b3c4-...",
+  "clientMsgId": "uuid-v4-here",
+  "sequenceNum": 42,
+  "status": "DELIVERED"
+}
+```
+
+---
+
+## Error Responses
+
+All error responses follow this shape:
+
+```json
+{
+  "status": 400,
+  "error": "Bad Request",
+  "message": "Email already in use: alice@example.com",
+  "timestamp": "2024-01-15T11:05:00Z",
+  "fieldErrors": {
+    "email": "must be a valid email address"
+  }
+}
+```
+
+`fieldErrors` is only present for validation failures (`400`).
+
+| Status | Meaning                              |
+|--------|--------------------------------------|
+| `400`  | Bad request / validation failure     |
+| `401`  | Missing or invalid JWT               |
+| `403`  | Authenticated but forbidden          |
+| `404`  | Resource not found                   |
+| `429`  | Rate limit exceeded                  |
+| `500`  | Internal server error                |
